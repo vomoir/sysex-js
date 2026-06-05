@@ -235,17 +235,35 @@ const setDidgeridooOnPart1 = () => {
         <MidiFilePlayer ref={playerRef} selectedOutput={selectedOutput} onMidiEvent={addToLog} />
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "20px", border: "1px solid #444", borderRadius: "8px", backgroundColor: "#000", color: "#0f0", fontFamily: "monospace", overflow: "hidden" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "20px", height: "100%" }}>
+        <div style={{ 
+          height: "600px", 
+          display: "flex", 
+          flexDirection: "column", 
+          padding: "20px", 
+          border: "1px solid #444", 
+          borderRadius: "8px", 
+          backgroundColor: "#000", 
+          color: "#0f0", 
+          fontFamily: "monospace", 
+          overflow: "hidden" 
+        }}>
           <h3 style={{ margin: "0 0 10px 0", color: "#eee" }}>Monitor</h3>
-          <div style={{ flex: 1, overflowY: "auto", fontSize: "0.85em", display: "flex", flexDirection: "column-reverse" }}>
+          <div style={{ 
+            flex: 1, 
+            overflowY: "auto", 
+            fontSize: "0.85em", 
+            display: "flex", 
+            flexDirection: "column-reverse",
+            paddingRight: "5px"
+          }}>
             {sysexLog.map((log) => (
-              <div key={log.id} style={{ marginBottom: "2px" }}>
+              <div key={log.id} style={{ marginBottom: "2px", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
                 <span style={{ color: "#666" }}>[{log.timestamp}]</span> {log.data}
               </div>
             ))}
           </div>
-          <button onClick={() => setSysexLog([])} style={{ marginTop: "10px", padding: "5px", backgroundColor: "#333", color: "#ccc", border: "none", borderRadius: "4px" }}>Clear</button>
+          <button onClick={() => setSysexLog([])} style={{ marginTop: "10px", padding: "5px", backgroundColor: "#333", color: "#ccc", border: "none", borderRadius: "4px", cursor: "pointer" }}>Clear</button>
         </div>
       </div>
     </div>
