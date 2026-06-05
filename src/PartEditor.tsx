@@ -2,15 +2,18 @@ import React, { useEffect, useState, useCallback } from "react";
 import { Output } from "webmidi";
 import { buildRolandSysex, SC88_ADDRESSES, ROLAND_ID, MODEL_ID_SC88PRO, MODEL_ID_GS, EFX_TYPES } from "./utils/rolandSysex";
 import { midiManager } from "./utils/midiManager";
-import { SC88PRO_INSTRUMENTS } from "./utils/instruments";
+import { SC88PRO_INSTRUMENTS, SC88PRO_DRUM_KITS } from "./utils/instruments";
 import MidiFilePlayer from "./MidiFilePlayer";
 import type { MidiFilePlayerRef } from "./MidiFilePlayer";
 
 interface PartState {
   instrumentIndex: number;
+  drumKitIndex: number;
   volume: number;
   pan: number;
   reverb: number;
+  chorus: number;
+  delay: number;
   muted: boolean;
   soloed: boolean;
   [key: string]: number | boolean; // Allow dynamic parameter keys
@@ -27,9 +30,12 @@ const PartEditor: React.FC = () => {
   const [partStates, setPartStates] = useState<PartState[]>(
     Array.from({ length: 16 }, () => ({
       instrumentIndex: 0,
+      drumKitIndex: 0,
       volume: 100,
       pan: 64,
       reverb: 40,
+      chorus: 0,
+      delay: 0,
       muted: false,
       soloed: false
     }))
@@ -239,6 +245,18 @@ const setDidgeridooOnPart1 = () => {
     sendParameter(SC88_ADDRESSES.partReverb(partIndex), val);
   };
 
+  const handleChorusChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseInt(e.target.value);
+    updateCurrentPart({ chorus: val });
+    sendParameter(SC88_ADDRESSES.partChorus(partIndex), val);
+  };
+
+  const handleDelayChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseInt(e.target.value);
+    updateCurrentPart({ delay: val });
+    sendParameter(SC88_ADDRESSES.partDelay(partIndex), val, MODEL_ID_SC88PRO);
+  };
+
   const handleInstrumentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const idx = parseInt(e.target.value);
     updateCurrentPart({ instrumentIndex: idx });
@@ -251,6 +269,21 @@ const setDidgeridooOnPart1 = () => {
       addToLog([0xB0 + channel - 1, 0x00, inst.bankMSB]);
       addToLog([0xB0 + channel - 1, 0x20, inst.bankLSB]);
       addToLog([0xC0 + channel - 1, inst.program]);
+    }
+  };
+
+  const handleDrumKitChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const idx = parseInt(e.target.value);
+    updateCurrentPart({ drumKitIndex: idx });
+    const kit = SC88PRO_DRUM_KITS[idx];
+    if (selectedOutput && kit) {
+      const channel = 10; // Drums are always Ch 10
+      selectedOutput.sendControlChange(0, kit.bankMSB, { channels: channel });
+      selectedOutput.sendControlChange(32, kit.bankLSB, { channels: channel });
+      selectedOutput.sendProgramChange(kit.program, { channels: channel });
+      addToLog([0xB0 + channel - 1, 0x00, kit.bankMSB]);
+      addToLog([0xB0 + channel - 1, 0x20, kit.bankLSB]);
+      addToLog([0xC0 + channel - 1, kit.program]);
     }
   };
 
@@ -407,6 +440,16 @@ const setDidgeridooOnPart1 = () => {
         </div>
 
         <div style={{ marginBottom: "10px" }}>
+          <label>Chorus ({currentPart.chorus})</label>
+          <input type="range" min="0" max="127" value={currentPart.chorus} onChange={handleChorusChange} style={{ width: "100%" }} />
+        </div>
+
+        <div style={{ marginBottom: "10px" }}>
+          <label>Delay ({currentPart.delay})</label>
+          <input type="range" min="0" max="127" value={currentPart.delay} onChange={handleDelayChange} style={{ width: "100%" }} />
+        </div>
+
+        <div style={{ marginBottom: "10px" }}>
           <label>EFX Send (SC-88 Pro Mode)</label>
           <input 
             type="range" 
@@ -448,6 +491,15 @@ const setDidgeridooOnPart1 = () => {
             <h4 style={{ margin: "0 0 10px 0", color: "#ecf0f1" }}>🥁 Drum Note Editor</h4>
             
             <div style={{ marginBottom: "10px" }}>
+              <label style={{ fontSize: "0.8em", color: "#bdc3c7" }}>Select Drum Kit</label>
+              <select 
+                value={currentPart.drumKitIndex} 
+                onChange={handleDrumKitChange}
+                style={{ width: "100%", padding: "4px", backgroundColor: "#34495e", color: "white", border: "none", marginBottom: "10px" }}
+              >
+                {SC88PRO_DRUM_KITS.map((kit, i) => <option key={i} value={i}>{kit.name}</option>)}
+              </select>
+
               <label style={{ fontSize: "0.8em", color: "#bdc3c7" }}>Select Drum Instrument</label>
               <div style={{ display: "flex", gap: "8px" }}>
                 <select 

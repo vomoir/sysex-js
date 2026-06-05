@@ -107,11 +107,12 @@ export const SC88_ADDRESSES = {
   // Drum Setup Parameters (GS Standard)
   // drumSet: 0 (Setup 1) or 1 (Setup 2)
   // note: MIDI Note Number (0-127)
-  drumNoteLevel: (drumSet: number, note: number) => [0x41, drumSet, note, 0x02],
-  drumNotePan: (drumSet: number, note: number) => [0x41, drumSet, note, 0x03],
-  drumNoteReverb: (drumSet: number, note: number) => [0x41, drumSet, note, 0x04],
-  drumNoteChorus: (drumSet: number, note: number) => [0x41, drumSet, note, 0x05],
-  drumNoteDelay: (drumSet: number, note: number) => [0x41, drumSet, note, 0x06],
+  drumNotePitch: (drumSet: number, note: number) => [0x41, drumSet, note, 0x00],
+  drumNoteLevel: (drumSet: number, note: number) => [0x41, drumSet, note, 0x03],
+  drumNotePan: (drumSet: number, note: number) => [0x41, drumSet, note, 0x04],
+  drumNoteReverb: (drumSet: number, note: number) => [0x41, drumSet, note, 0x05],
+  drumNoteChorus: (drumSet: number, note: number) => [0x41, drumSet, note, 0x06],
+  drumNoteDelay: (drumSet: number, note: number) => [0x41, drumSet, note, 0x07],
 
   // LCD Display (Model ID: 0x45)
   // Max 16 characters for the main display line
