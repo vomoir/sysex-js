@@ -80,27 +80,41 @@ const PartEditor: React.FC = () => {
 const setDidgeridooOnPart1 = () => {
   if (!selectedOutput) return;
 
-  // Correcting the addresses for SC-88 Pro Part 1
-  // Part 1 Address for Variation Bank: 40 11 00
-  // Part 1 Address for Program Change: 40 11 01
-  const part1Address = [0x40, 0x11, 0x00];
+  const channel = 1; // Targeting Part 1
+  const statusCC = 0xB0 + (channel - 1);
+  const statusPC = 0xC0 + (channel - 1);
 
-  // 1. Generate SysEx for Bank Select (Variation Bank 8)
-  const bankSysexBody = buildRolandSysex(part1Address, [0x08], deviceId - 1, MODEL_ID_GS);
-  
-  // 2. Generate SysEx for Program Change (Instrument 110)
-  // Program change address is 40 11 01
-  const progAddress = [0x40, 0x11, 0x01];
-  const programSysexBody = buildRolandSysex(progAddress, [0x6D], deviceId - 1, MODEL_ID_GS); // 110 is 0x6E, but PC is often 0-indexed in sysex too? Actually 0x6E is 110. Let's use 0x6E for PC 110.
+  console.log(`Executing multi-layer hardware reset & CC Map force on Channel ${channel}...`);
 
-  console.log("Sending Didgeridoo SysEx messages...");
-  selectedOutput.sendSysex(ROLAND_ID, bankSysexBody);
-  selectedOutput.sendSysex(ROLAND_ID, programSysexBody);
-  
-  addToLog([0xF0, ROLAND_ID, ...bankSysexBody, 0xF7]);
-  addToLog([0xF0, ROLAND_ID, ...programSysexBody, 0xF7]);
+  // LAYER A: Universal Master GS Engine Reset SysEx
+  const resetBody = buildRolandSysex(SC88_ADDRESSES.GS_RESET, [0x00], deviceId - 1, MODEL_ID_GS);
+  selectedOutput.sendSysex(ROLAND_ID, resetBody);
+  addToLog([0xF0, ROLAND_ID, ...resetBody, 0xF7]);
 
-  console.log("Didgeridoo SysEx messages sent successfully!");
+  // LAYER B: Force Bank Variables using Standard MIDI Control Changes after 150ms
+  setTimeout(() => {
+    console.log("Injecting Bank Selection controllers...");
+    
+    // 1. Bank Select MSB (CC 00) = 8 (This isolates Bank 8)
+    selectedOutput.send([statusCC, 0x00, 0x08]); 
+    addToLog([statusCC, 0x00, 0x08]);
+    
+    // 2. Bank Select LSB (CC 32) = 3 (CRITICAL: 3 explicitly forces the SC-88 Pro Tone Map)
+    selectedOutput.send([statusCC, 0x20, 0x03]); 
+    addToLog([statusCC, 0x20, 0x03]);
+  }, 150);
+
+  // LAYER C: Execute the Instrument Change instruction after 300ms
+  setTimeout(() => {
+    console.log("Injecting Program Change...");
+    
+    // Program Change (PC) = 110 (Mizmar base register containing the Didgeridoo patch)
+    // 110 is 0x6D in Hexadecimal (zero based)
+    selectedOutput.send([statusPC, 0x6D]);
+    addToLog([statusPC, 0x6D]);
+    
+    console.log("Didgeridoo engine command loop fully dispatched.");
+  }, 300);
 };
 	
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
