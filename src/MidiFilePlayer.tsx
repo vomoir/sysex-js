@@ -5,6 +5,7 @@ import { Output } from "webmidi";
 interface MidiFilePlayerProps {
   selectedOutput: Output | null;
   onMidiEvent?: (bytes: number[]) => void;
+  partStates?: { muted: boolean; soloed: boolean }[];
 }
 
 export interface MidiFilePlayerRef {
@@ -22,7 +23,7 @@ interface MidiEvent {
   programNumber?: number;
 }
 
-const MidiFilePlayer = forwardRef<MidiFilePlayerRef, MidiFilePlayerProps>(({ selectedOutput, onMidiEvent }, ref) => {
+const MidiFilePlayer = forwardRef<MidiFilePlayerRef, MidiFilePlayerProps>(({ selectedOutput, onMidiEvent, partStates }, ref) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
@@ -32,6 +33,7 @@ const MidiFilePlayer = forwardRef<MidiFilePlayerRef, MidiFilePlayerProps>(({ sel
   // Use refs for values needed in the player callback to avoid re-creating the player
   const selectedOutputRef = useRef(selectedOutput);
   const onMidiEventRef = useRef(onMidiEvent);
+  const partStatesRef = useRef(partStates);
   const lastProgressUpdateRef = useRef(0);
 
   useImperativeHandle(ref, () => ({
@@ -46,6 +48,32 @@ const MidiFilePlayer = forwardRef<MidiFilePlayerRef, MidiFilePlayerProps>(({ sel
     onMidiEventRef.current = onMidiEvent;
   }, [onMidiEvent]);
 
+  // Track partStates changes to handle immediate muting of active channels
+  useEffect(() => {
+    const prevStates = partStatesRef.current;
+    partStatesRef.current = partStates;
+    
+    if (!selectedOutput || !partStates || !prevStates) return;
+
+    // Helper to check if a channel IS ACTIVE
+    const isActive = (states: { muted: boolean, soloed: boolean }[], idx: number) => {
+      const hasSolo = states.some(s => s.soloed);
+      if (hasSolo) return states[idx].soloed;
+      return !states[idx].muted;
+    };
+
+    // If a channel was active and is now inactive, send "All Notes Off"
+    for (let i = 0; i < 16; i++) {
+      const wasActive = isActive(prevStates, i);
+      const isNowActive = isActive(partStates, i);
+      
+      if (wasActive && !isNowActive) {
+        selectedOutput.sendControlChange(123, 0, { channels: i + 1 });
+        selectedOutput.sendControlChange(120, 0, { channels: i + 1 });
+      }
+    }
+  }, [partStates, selectedOutput]);
+
   useEffect(() => {
     // Initialize the player once
     playerRef.current = new MidiPlayer.Player((event: MidiEvent) => {
@@ -54,6 +82,24 @@ const MidiFilePlayer = forwardRef<MidiFilePlayerRef, MidiFilePlayerProps>(({ sel
 
       try {
         const channel = Math.max(1, Math.min(16, event.channel || 1));
+        const channelIdx = channel - 1;
+        
+        // Mute/Solo Logic
+        const states = partStatesRef.current;
+        if (states) {
+          const hasSolo = states.some(s => s.soloed);
+          const isSoloed = states[channelIdx].soloed;
+          const isMuted = states[channelIdx].muted;
+          
+          const shouldPlay = hasSolo ? isSoloed : !isMuted;
+          if (!shouldPlay) {
+            // Special case: still allow Note Off, Program Change, etc? 
+            // Usually, we filter EVERYTHING except perhaps essential system messages.
+            // For now, filter everything if inactive.
+            return;
+          }
+        }
+
         const eventName = (event.name || "").toLowerCase();
         
         // --- NOTE ON ---
