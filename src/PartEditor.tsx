@@ -13,16 +13,33 @@ const PartEditor: React.FC = () => {
   const [deviceId, setDeviceId] = useState(17); 
   const [partIndex, setPartIndex] = useState(0); 
   
-  const [instrumentIndex, setInstrumentIndex] = useState(0);
-  const [volume, setVolume] = useState(100);
-  const [pan, setPan] = useState(64);
-  const [reverb, setReverb] = useState(40);
+  // Manage state for all 16 parts
+  const [partStates, setPartStates] = useState(
+    Array.from({ length: 16 }, () => ({
+      instrumentIndex: 0,
+      volume: 100,
+      pan: 64,
+      reverb: 40,
+      muted: false,
+      soloed: false
+    }))
+  );
   
   const [lcdText, setLcdText] = useState("HELLO SC-88 PRO");
   const [useSysex] = useState(true);
   const [sysexLog, setSysexLog] = useState<{ id: number, data: string, timestamp: string }[]>([]);
   
   const playerRef = React.useRef<MidiFilePlayerRef>(null);
+
+  const currentPart = partStates[partIndex];
+
+  const updateCurrentPart = (updates: Partial<typeof currentPart>) => {
+    setPartStates(prev => {
+      const next = [...prev];
+      next[partIndex] = { ...next[partIndex], ...updates };
+      return next;
+    });
+  };
 
   const addToLog = useCallback((bytes: (number | string | undefined)[]) => {
     // Filter and convert bytes to hex
@@ -119,25 +136,25 @@ const setDidgeridooOnPart1 = () => {
 	
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseInt(e.target.value);
-    setVolume(val);
+    updateCurrentPart({ volume: val });
     sendParameter(SC88_ADDRESSES.partLevel(partIndex), val);
   };
 
   const handlePanChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseInt(e.target.value);
-    setPan(val);
+    updateCurrentPart({ pan: val });
     sendParameter(SC88_ADDRESSES.partPan(partIndex), val);
   };
 
   const handleReverbChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseInt(e.target.value);
-    setReverb(val);
+    updateCurrentPart({ reverb: val });
     sendParameter(SC88_ADDRESSES.partReverb(partIndex), val);
   };
 
   const handleInstrumentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const idx = parseInt(e.target.value);
-    setInstrumentIndex(idx);
+    updateCurrentPart({ instrumentIndex: idx });
     const inst = SC88PRO_INSTRUMENTS[idx];
     if (selectedOutput && inst) {
       const channel = partIndex + 1;
@@ -148,6 +165,18 @@ const setDidgeridooOnPart1 = () => {
       addToLog([0xB0 + channel - 1, 0x20, inst.bankLSB]);
       addToLog([0xC0 + channel - 1, inst.program]);
     }
+  };
+
+  const toggleMute = () => {
+    updateCurrentPart({ muted: !currentPart.muted });
+  };
+
+  const toggleSolo = () => {
+    updateCurrentPart({ soloed: !currentPart.soloed });
+  };
+
+  const resetAllMuteSolo = () => {
+    setPartStates(prev => prev.map(p => ({ ...p, muted: false, soloed: false })));
   };
 
   const handleLcdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -207,30 +236,80 @@ const setDidgeridooOnPart1 = () => {
         <div style={{ marginBottom: "15px" }}>
           <label>Part: </label>
           <select value={partIndex} onChange={(e) => setPartIndex(parseInt(e.target.value))} style={{ width: "100%", padding: "4px" }}>
-            {Array.from({ length: 16 }).map((_, i) => <option key={i} value={i}>Part {i + 1}</option>)}
+            {Array.from({ length: 16 }).map((_, i) => <option key={i} value={i}>Part {i + 1} {partStates[i].muted ? "(M)" : ""} {partStates[i].soloed ? "(S)" : ""}</option>)}
           </select>
         </div>
 
         <div style={{ marginBottom: "15px" }}>
           <label>Instrument: </label>
-          <select value={instrumentIndex} onChange={handleInstrumentChange} style={{ width: "100%", padding: "4px" }}>
+          <select value={currentPart.instrumentIndex} onChange={handleInstrumentChange} style={{ width: "100%", padding: "4px" }}>
             {SC88PRO_INSTRUMENTS.map((inst, i) => <option key={i} value={i}>{inst.name}</option>)}
           </select>
         </div>
 
+        <div style={{ display: "flex", gap: "10px", marginBottom: "15px" }}>
+          <button 
+            onClick={toggleMute} 
+            style={{ 
+              flex: 1, 
+              padding: "8px", 
+              backgroundColor: currentPart.muted ? "#e74c3c" : "#444", 
+              color: "white", 
+              border: "none", 
+              borderRadius: "4px",
+              fontWeight: "bold",
+              cursor: "pointer"
+            }}
+          >
+            {currentPart.muted ? "🔇 MUTED" : "🔈 MUTE"}
+          </button>
+          <button 
+            onClick={toggleSolo} 
+            style={{ 
+              flex: 1, 
+              padding: "8px", 
+              backgroundColor: currentPart.soloed ? "#f1c40f" : "#444", 
+              color: currentPart.soloed ? "black" : "white", 
+              border: "none", 
+              borderRadius: "4px",
+              fontWeight: "bold",
+              cursor: "pointer"
+            }}
+          >
+            {currentPart.soloed ? "⭐ SOLOED" : "✨ SOLO"}
+          </button>
+        </div>
+
+        <button 
+          onClick={resetAllMuteSolo} 
+          style={{ 
+            width: "100%", 
+            marginBottom: "15px", 
+            padding: "8px", 
+            backgroundColor: "#2980b9", 
+            color: "white", 
+            border: "none", 
+            borderRadius: "4px",
+            fontWeight: "bold",
+            cursor: "pointer"
+          }}
+        >
+          🔄 Reset Mute/Solo
+        </button>
+
         <div style={{ marginBottom: "10px" }}>
-          <label>Volume ({volume})</label>
-          <input type="range" min="0" max="127" value={volume} onChange={handleVolumeChange} style={{ width: "100%" }} />
+          <label>Volume ({currentPart.volume})</label>
+          <input type="range" min="0" max="127" value={currentPart.volume} onChange={handleVolumeChange} style={{ width: "100%" }} />
         </div>
 
         <div style={{ marginBottom: "10px" }}>
-          <label>Pan ({pan})</label>
-          <input type="range" min="1" max="127" value={pan} onChange={handlePanChange} style={{ width: "100%" }} />
+          <label>Pan ({currentPart.pan})</label>
+          <input type="range" min="1" max="127" value={currentPart.pan} onChange={handlePanChange} style={{ width: "100%" }} />
         </div>
 
         <div style={{ marginBottom: "10px" }}>
-          <label>Reverb ({reverb})</label>
-          <input type="range" min="0" max="127" value={reverb} onChange={handleReverbChange} style={{ width: "100%" }} />
+          <label>Reverb ({currentPart.reverb})</label>
+          <input type="range" min="0" max="127" value={currentPart.reverb} onChange={handleReverbChange} style={{ width: "100%" }} />
         </div>
 
         <hr style={{ borderColor: "#444" }} />
@@ -246,7 +325,7 @@ const setDidgeridooOnPart1 = () => {
           <button onClick={setDidgeridooOnPart1} style={{ flex: 2, padding: "12px", backgroundColor: "#4CAF50", color: "white", border: "none", borderRadius: "4px", fontWeight: "bold", cursor: "pointer" }}>🎵 Set Didgeridoo on Part 1</button>          
         </div>
 
-        <MidiFilePlayer ref={playerRef} selectedOutput={selectedOutput} onMidiEvent={addToLog} />
+        <MidiFilePlayer ref={playerRef} selectedOutput={selectedOutput} onMidiEvent={addToLog} partStates={partStates} />
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "20px", height: "100%" }}>
