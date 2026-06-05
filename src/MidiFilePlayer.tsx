@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef } from "react";
 import MidiPlayer from "midi-player-js";
 import { Output } from "webmidi";
 
@@ -7,63 +7,114 @@ interface MidiFilePlayerProps {
   onMidiEvent?: (bytes: number[]) => void;
 }
 
-const MidiFilePlayer: React.FC<MidiFilePlayerProps> = ({ selectedOutput, onMidiEvent }) => {
+export interface MidiFilePlayerRef {
+  stop: () => void;
+}
+
+interface MidiEvent {
+  channel?: number;
+  name?: string;
+  noteNumber?: number;
+  velocity?: number;
+  number?: number;
+  controllerType?: number;
+  value?: number;
+  programNumber?: number;
+}
+
+const MidiFilePlayer = forwardRef<MidiFilePlayerRef, MidiFilePlayerProps>(({ selectedOutput, onMidiEvent }, ref) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const playerRef = useRef<MidiPlayer.Player | null>(null);
   const songDataRef = useRef<ArrayBuffer | null>(null);
+  
+  // Use refs for values needed in the player callback to avoid re-creating the player
+  const selectedOutputRef = useRef(selectedOutput);
+  const onMidiEventRef = useRef(onMidiEvent);
+  const lastProgressUpdateRef = useRef(0);
+
+  useImperativeHandle(ref, () => ({
+    stop: stopPlayback
+  }));
 
   useEffect(() => {
-    // Initialize the player
-    playerRef.current = new MidiPlayer.Player((event: any) => {
-      if (!selectedOutput) return;
+    selectedOutputRef.current = selectedOutput;
+  }, [selectedOutput]);
+
+  useEffect(() => {
+    onMidiEventRef.current = onMidiEvent;
+  }, [onMidiEvent]);
+
+  useEffect(() => {
+    // Initialize the player once
+    playerRef.current = new MidiPlayer.Player((event: MidiEvent) => {
+      const output = selectedOutputRef.current;
+      if (!output) return;
 
       try {
-        const channel = event.channel || 1;
-        // console.log("[MidiFilePlayer] Event:", event.name, "Ch:", channel);
+        const channel = Math.max(1, Math.min(16, event.channel || 1));
+        const eventName = (event.name || "").toLowerCase();
         
-        if (event.name === "Note on" && event.velocity > 0) {
-          selectedOutput.playNote(event.noteNumber || event.noteName, {
-            channels: channel,
-            attack: event.velocity / 127
-          });
-          onMidiEvent?.([0x90 + channel - 1, event.noteNumber || 60, event.velocity]);
-        } else if (event.name === "Note off" || (event.name === "Note on" && event.velocity === 0)) {
-          selectedOutput.stopNote(event.noteNumber || event.noteName, {
-            channels: channel
-          });
-          onMidiEvent?.([0x80 + channel - 1, event.noteNumber || 60, 0]);
-        } else if (event.name === "Controller Change") {
-          selectedOutput.sendControlChange(event.number || event.controllerType, event.value, {
-            channels: channel
-          });
-          onMidiEvent?.([0xB0 + channel - 1, event.number || event.controllerType, event.value]);
-        } else if (event.name === "Program Change") {
-          selectedOutput.sendProgramChange(event.value || event.programNumber, {
-            channels: channel
-          });
-          onMidiEvent?.([0xC0 + channel - 1, event.value || event.programNumber]);
-        } else if (event.name === "Pitch Bend") {
-          selectedOutput.sendPitchBend((event.value - 8192) / 8192, {
-            channels: channel
-          });
-          onMidiEvent?.([0xE0 + channel - 1, event.value & 0x7F, (event.value >> 7) & 0x7F]);
+        // --- NOTE ON ---
+        if (eventName === "note on") {
+          const note = event.noteNumber || 60;
+          const velocity = event.velocity || 0;
+          
+          if (velocity > 0) {
+            output.playNote(note, { channels: channel, attack: velocity / 127 });
+            onMidiEventRef.current?.([0x90 + channel - 1, note, velocity]);
+          } else {
+            output.stopNote(note, { channels: channel });
+            onMidiEventRef.current?.([0x80 + channel - 1, note, 0]);
+          }
+        } 
+        // --- NOTE OFF ---
+        else if (eventName === "note off") {
+          const note = event.noteNumber || 60;
+          output.stopNote(note, { channels: channel });
+          onMidiEventRef.current?.([0x80 + channel - 1, note, 0]);
+        } 
+        // --- CONTROL CHANGE ---
+        else if (eventName === "controller change") {
+          const num = event.number !== undefined ? event.number : event.controllerType;
+          const val = event.value !== undefined ? event.value : 0;
+          if (typeof num === 'number') {
+            output.sendControlChange(num, val, { channels: channel });
+            onMidiEventRef.current?.([0xB0 + channel - 1, num, val]);
+          }
+        } 
+        // --- PROGRAM CHANGE ---
+        else if (eventName === "program change") {
+          const prog = event.value !== undefined ? event.value : event.programNumber;
+          if (typeof prog === 'number') {
+            output.sendProgramChange(prog, { channels: channel });
+            onMidiEventRef.current?.([0xC0 + channel - 1, prog]);
+          }
+        } 
+        // --- PITCH BEND ---
+        else if (eventName === "pitch bend") {
+          const val = event.value !== undefined ? event.value : 8192;
+          output.sendPitchBend((val - 8192) / 8192, { channels: channel });
+          onMidiEventRef.current?.([0xE0 + channel - 1, val & 0x7F, (val >> 7) & 0x7F]);
         }
       } catch (err) {
-        console.warn("Error sending MIDI event:", err);
+        console.error("[Player] Event Error:", err, event);
       }
     });
-
-    if (songDataRef.current) {
-      playerRef.current.loadArrayBuffer(songDataRef.current);
-    }
 
     playerRef.current.on("playing", () => {
       if (!playerRef.current) return;
       const totalTicks = playerRef.current.getTotalTicks() || 1;
       const currentTick = playerRef.current.getCurrentTick();
-      setProgress((currentTick / totalTicks) * 100);
+      const newProgress = (currentTick / totalTicks) * 100;
+      
+      // Throttle progress updates to ~10fps to avoid UI lag
+      const now = Date.now();
+      if (now - lastProgressUpdateRef.current > 100) {
+        setProgress(newProgress);
+        lastProgressUpdateRef.current = now;
+      }
     });
 
     playerRef.current.on("endOfFile", () => {
@@ -76,22 +127,44 @@ const MidiFilePlayer: React.FC<MidiFilePlayerProps> = ({ selectedOutput, onMidiE
         playerRef.current.stop();
       }
     };
-  }, [selectedOutput, onMidiEvent]);
+  }, []); // Only run once on mount
+
+  // Handle re-loading data if it changes (though songDataRef is used)
+  useEffect(() => {
+    if (playerRef.current && songDataRef.current) {
+       // playerRef.current.loadArrayBuffer(songDataRef.current);
+       // This might be redundant if handleFileChange already loads it
+    }
+  }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      // 1. Stop current playback immediately
+      if (playerRef.current) {
+        playerRef.current.stop();
+      }
+      setIsPlaying(false);
       setFileName(file.name);
+      setProgress(0);
+
       const reader = new FileReader();
       reader.onload = (event) => {
         if (event.target?.result instanceof ArrayBuffer) {
           songDataRef.current = event.target.result;
           if (playerRef.current) {
-            playerRef.current.loadArrayBuffer(event.target.result);
-            setProgress(0);
-            setIsPlaying(false);
+            try {
+              playerRef.current.loadArrayBuffer(event.target.result);
+            } catch (err) {
+              console.error("[Player] Load Error:", err);
+              setFileName(null);
+            }
           }
         }
+      };
+      reader.onerror = () => {
+        console.error("[Player] File Read Error");
+        setFileName(null);
       };
       reader.readAsArrayBuffer(file);
     }
@@ -147,6 +220,6 @@ const MidiFilePlayer: React.FC<MidiFilePlayerProps> = ({ selectedOutput, onMidiE
       )}
     </div>
   );
-};
+});
 
 export default MidiFilePlayer;
