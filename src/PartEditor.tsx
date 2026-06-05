@@ -1,13 +1,13 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { Output } from "webmidi";
-import { buildRolandSysex, SC88_ADDRESSES, ROLAND_ID, EFX_TYPES, MODEL_ID_SC88PRO, MODEL_ID_GS } from "./utils/rolandSysex";
+import { buildRolandSysex, SC88_ADDRESSES, ROLAND_ID, MODEL_ID_SC88PRO, MODEL_ID_GS } from "./utils/rolandSysex";
 import { midiManager } from "./utils/midiManager";
 import { SC88PRO_INSTRUMENTS } from "./utils/instruments";
 import MidiFilePlayer from "./MidiFilePlayer";
+import type { MidiFilePlayerRef } from "./MidiFilePlayer";
 
 const PartEditor: React.FC = () => {
   const [status, setStatus] = useState<"uninitialized" | "initializing" | "ready" | "error">("uninitialized");
-  const [errorMessage, setErrorMessage] = useState("");
   const [outputs, setOutputs] = useState<Output[]>([]);
   const [selectedOutput, setSelectedOutput] = useState<Output | null>(null);
   const [deviceId, setDeviceId] = useState(17); 
@@ -17,27 +17,28 @@ const PartEditor: React.FC = () => {
   const [volume, setVolume] = useState(100);
   const [pan, setPan] = useState(64);
   const [reverb, setReverb] = useState(40);
-  const [efxSend, setEfxSend] = useState(0);
   
   const [lcdText, setLcdText] = useState("HELLO SC-88 PRO");
-  const [isFlashing, setIsFlashing] = useState(false);
-  const [useSysex, setUseSysex] = useState(true);
+  const [useSysex] = useState(true);
   const [sysexLog, setSysexLog] = useState<{ id: number, data: string, timestamp: string }[]>([]);
+  
+  const playerRef = React.useRef<MidiFilePlayerRef>(null);
 
-  const flashIndicator = () => {
-    setIsFlashing(true);
-    setTimeout(() => setIsFlashing(false), 100);
-  };
+  const addToLog = useCallback((bytes: (number | string | undefined)[]) => {
+    // Filter and convert bytes to hex
+    const validBytes = bytes.filter((b): b is number | string => b !== undefined);
+    const hex = validBytes.map(b => {
+      if (typeof b === 'number') return b.toString(16).toUpperCase().padStart(2, "0");
+      return b.toString(); // Keep strings as is
+    }).join(" ");
 
-  const addToLog = (bytes: number[]) => {
-    const hex = bytes.map(b => b.toString(16).toUpperCase().padStart(2, "0")).join(" ");
     const entry = {
       id: Date.now() + Math.random(),
-      data: bytes[0] === 0xF0 ? hex : `[MIDI] ${hex}`,
+      data: validBytes[0] === 0xF0 ? hex : `[MIDI] ${hex}`,
       timestamp: new Date().toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })
     };
     setSysexLog(prev => [entry, ...prev].slice(0, 50));
-  };
+  }, []);
 
   const handleInit = async () => {
     setStatus("initializing");
@@ -47,9 +48,9 @@ const PartEditor: React.FC = () => {
       const availableOutputs = midiManager.getOutputs();
       setOutputs(availableOutputs);
       if (availableOutputs.length > 0) setSelectedOutput(availableOutputs[0]);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setStatus("error");
-      setErrorMessage(err.message || "Failed to enable MIDI.");
+      console.error("MIDI Init Error:", err);
     }
   };
 
@@ -73,9 +74,35 @@ const PartEditor: React.FC = () => {
     const sysexBody = buildRolandSysex(address, data, deviceId - 1, modelId);
     selectedOutput.sendSysex(ROLAND_ID, sysexBody);
     addToLog([0xF0, ROLAND_ID, ...sysexBody, 0xF7]);
-    flashIndicator();
   };
+  
+// Sending the command via WebMidi (targeting Part 1 / MIDI Ch 1)
+const setDidgeridooOnPart1 = () => {
+  if (!selectedOutput) return;
 
+  // Correcting the addresses for SC-88 Pro Part 1
+  // Part 1 Address for Variation Bank: 40 11 00
+  // Part 1 Address for Program Change: 40 11 01
+  const part1Address = [0x40, 0x11, 0x00];
+
+  // 1. Generate SysEx for Bank Select (Variation Bank 8)
+  const bankSysexBody = buildRolandSysex(part1Address, [0x08], deviceId - 1, MODEL_ID_GS);
+  
+  // 2. Generate SysEx for Program Change (Instrument 110)
+  // Program change address is 40 11 01
+  const progAddress = [0x40, 0x11, 0x01];
+  const programSysexBody = buildRolandSysex(progAddress, [0x6D], deviceId - 1, MODEL_ID_GS); // 110 is 0x6E, but PC is often 0-indexed in sysex too? Actually 0x6E is 110. Let's use 0x6E for PC 110.
+
+  console.log("Sending Didgeridoo SysEx messages...");
+  selectedOutput.sendSysex(ROLAND_ID, bankSysexBody);
+  selectedOutput.sendSysex(ROLAND_ID, programSysexBody);
+  
+  addToLog([0xF0, ROLAND_ID, ...bankSysexBody, 0xF7]);
+  addToLog([0xF0, ROLAND_ID, ...programSysexBody, 0xF7]);
+
+  console.log("Didgeridoo SysEx messages sent successfully!");
+};
+	
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseInt(e.target.value);
     setVolume(val);
@@ -94,12 +121,6 @@ const PartEditor: React.FC = () => {
     sendParameter(SC88_ADDRESSES.partReverb(partIndex), val);
   };
 
-  const handleEfxSendChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseInt(e.target.value);
-    setEfxSend(val);
-    sendParameter((SC88_ADDRESSES as any).sc88PartEfxSend(partIndex), val, MODEL_ID_GS);
-  };
-
   const handleInstrumentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const idx = parseInt(e.target.value);
     setInstrumentIndex(idx);
@@ -112,7 +133,6 @@ const PartEditor: React.FC = () => {
       addToLog([0xB0 + channel - 1, 0x00, inst.bankMSB]);
       addToLog([0xB0 + channel - 1, 0x20, inst.bankLSB]);
       addToLog([0xC0 + channel - 1, inst.program]);
-      flashIndicator();
     }
   };
 
@@ -125,37 +145,26 @@ const PartEditor: React.FC = () => {
   };
 
   const playTestNote = () => {
-    console.log("[TestNote] Clicked. Output:", selectedOutput?.name, "Channel:", partIndex + 1);
-    if (!selectedOutput) {
-      console.warn("[TestNote] No output selected!");
-      return;
-    }
+    if (!selectedOutput) return;
     const channel = partIndex + 1;
     try {
-      // 1. Send standard MIDI Note On
       selectedOutput.playNote("C4", { channels: channel, duration: 500, attack: 0.8 });
-      
-      // 2. Also send a Volume 100 CC just in case it was at 0
       selectedOutput.sendControlChange(7, 100, { channels: channel });
       selectedOutput.sendControlChange(11, 127, { channels: channel });
-
       addToLog([0x90 + channel - 1, 0x3C, 0x66]); 
-      flashIndicator();
-      console.log("[TestNote] Command sent successfully.");
     } catch (err) {
-      console.error("[TestNote] Failed to send:", err);
+      console.error("[TestNote] Error:", err);
     }
   };
 
   const sendPanic = () => {
+    playerRef.current?.stop();
     if (!selectedOutput) return;
-    console.log("[Panic] Sending All Notes Off to all 16 channels...");
     for (let i = 1; i <= 16; i++) {
-      selectedOutput.sendControlChange(123, 0, { channels: i }); // All Notes Off
-      selectedOutput.sendControlChange(120, 0, { channels: i }); // All Sound Off
-      selectedOutput.sendControlChange(7, 100, { channels: i });  // Reset Volume to 100
+      selectedOutput.sendControlChange(123, 0, { channels: i });
+      selectedOutput.sendControlChange(120, 0, { channels: i });
+      selectedOutput.sendControlChange(7, 100, { channels: i });
     }
-    // Also send a GS Reset SysEx
     const resetBody = buildRolandSysex(SC88_ADDRESSES.GS_RESET, [0x00], deviceId - 1, MODEL_ID_GS);
     selectedOutput.sendSysex(ROLAND_ID, resetBody);
     addToLog([0xF0, ROLAND_ID, ...resetBody, 0xF7]);
@@ -214,11 +223,16 @@ const PartEditor: React.FC = () => {
         <h4 style={{ margin: "10px 0" }}>LCD Display</h4>
         <input type="text" value={lcdText} onChange={handleLcdChange} maxLength={16} style={{ width: "100%", padding: "8px", backgroundColor: "#333", color: "#0f0", border: "1px solid #555", fontFamily: "monospace" }} />
 
-        <button onClick={playTestNote} style={{ marginTop: "15px", width: "100%", padding: "12px", backgroundColor: "#4CAF50", color: "white", border: "none", borderRadius: "4px", fontWeight: "bold" }}>
-          🎵 Play Test Note (C4)
-        </button>
+        <div style={{ display: "flex", gap: "10px", marginTop: "15px" }}>
+          <button onClick={playTestNote} style={{ flex: 2, padding: "12px", backgroundColor: "#4CAF50", color: "white", border: "none", borderRadius: "4px", fontWeight: "bold", cursor: "pointer" }}>🎵 Play Test Note</button>
+          <button onClick={sendPanic} style={{ flex: 1, padding: "12px", backgroundColor: "#c0392b", color: "white", border: "none", borderRadius: "4px", fontWeight: "bold", cursor: "pointer" }}>🚫 PANIC</button>
+        </div>
 
-        <MidiFilePlayer selectedOutput={selectedOutput} onMidiEvent={addToLog} />
+        <div style={{ display: "flex", gap: "10px", marginTop: "15px" }}>
+          <button onClick={setDidgeridooOnPart1} style={{ flex: 2, padding: "12px", backgroundColor: "#4CAF50", color: "white", border: "none", borderRadius: "4px", fontWeight: "bold", cursor: "pointer" }}>🎵 Set Didgeridoo on Part 1</button>          
+        </div>
+
+        <MidiFilePlayer ref={playerRef} selectedOutput={selectedOutput} onMidiEvent={addToLog} />
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
