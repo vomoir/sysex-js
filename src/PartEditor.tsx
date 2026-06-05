@@ -310,47 +310,6 @@ const PartEditor: React.FC = () => {
     selectedOutput.sendSysex(ROLAND_ID, sysexBody);
     addToLog([0xF0, ROLAND_ID, ...sysexBody, 0xF7]);
   };
-  
-// Sending the command via WebMidi (targeting Part 1 / MIDI Ch 1)
-const setDidgeridooOnPart1 = () => {
-  if (!selectedOutput) return;
-
-  const channel = 1; // Targeting Part 1
-  const statusCC = 0xB0 + (channel - 1);
-  const statusPC = 0xC0 + (channel - 1);
-
-  console.log(`Executing multi-layer hardware reset & CC Map force on Channel ${channel}...`);
-
-  // LAYER A: Universal Master GS Engine Reset SysEx
-  const resetBody = buildRolandSysex(SC88_ADDRESSES.GS_RESET, [0x00], deviceId - 1, MODEL_ID_GS);
-  selectedOutput.sendSysex(ROLAND_ID, resetBody);
-  addToLog([0xF0, ROLAND_ID, ...resetBody, 0xF7]);
-
-  // LAYER B: Force Bank Variables using Standard MIDI Control Changes after 150ms
-  setTimeout(() => {
-    console.log("Injecting Bank Selection controllers...");
-    
-    // 1. Bank Select MSB (CC 00) = 8 (This isolates Bank 8)
-    selectedOutput.send([statusCC, 0x00, 0x08]); 
-    addToLog([statusCC, 0x00, 0x08]);
-    
-    // 2. Bank Select LSB (CC 32) = 3 (CRITICAL: 3 explicitly forces the SC-88 Pro Tone Map)
-    selectedOutput.send([statusCC, 0x20, 0x03]); 
-    addToLog([statusCC, 0x20, 0x03]);
-  }, 150);
-
-  // LAYER C: Execute the Instrument Change instruction after 300ms
-  setTimeout(() => {
-    console.log("Injecting Program Change...");
-    
-    // Program Change (PC) = 110 (Mizmar base register containing the Didgeridoo patch)
-    // 110 is 0x6D in Hexadecimal (zero based)
-    selectedOutput.send([statusPC, 0x6D]);
-    addToLog([statusPC, 0x6D]);
-    
-    console.log("Didgeridoo engine command loop fully dispatched.");
-  }, 300);
-};
 	
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseInt(e.target.value);
@@ -519,7 +478,7 @@ const setDidgeridooOnPart1 = () => {
               ))}
             </select>
           </div>
-          <div style={{ display: "flex", gap: "10px" }}>
+          <div style={{ display: "flex", gap: "10px", marginBottom: "10px" }}>
             <div style={{ flex: 1 }}>
               <label style={{ fontSize: "0.75em", display: "block" }}>Variation (CC 0)</label>
               <input 
@@ -541,6 +500,10 @@ const setDidgeridooOnPart1 = () => {
                 <option value={2}>2: SC-55</option>
               </select>
             </div>
+          </div>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button onClick={playTestNote} style={{ flex: 1, padding: "8px", backgroundColor: "#4CAF50", color: "white", border: "none", borderRadius: "4px", fontWeight: "bold", cursor: "pointer", fontSize: "0.85em" }}>🎵 Test Note</button>
+            <button onClick={sendPanic} style={{ flex: 1, padding: "8px", backgroundColor: "#c0392b", color: "white", border: "none", borderRadius: "4px", fontWeight: "bold", cursor: "pointer", fontSize: "0.85em" }}>🚫 Panic</button>
           </div>
         </div>
 
@@ -717,15 +680,6 @@ const setDidgeridooOnPart1 = () => {
         <hr style={{ borderColor: "#444" }} />
         <h4 style={{ margin: "10px 0" }}>LCD Display</h4>
         <input type="text" value={lcdText} onChange={handleLcdChange} maxLength={16} style={{ width: "100%", padding: "8px", backgroundColor: "#333", color: "#0f0", border: "1px solid #555", fontFamily: "monospace" }} />
-
-        <div style={{ display: "flex", gap: "10px", marginTop: "15px" }}>
-          <button onClick={playTestNote} style={{ flex: 2, padding: "12px", backgroundColor: "#4CAF50", color: "white", border: "none", borderRadius: "4px", fontWeight: "bold", cursor: "pointer" }}>🎵 Play Test Note</button>
-          <button onClick={sendPanic} style={{ flex: 1, padding: "12px", backgroundColor: "#c0392b", color: "white", border: "none", borderRadius: "4px", fontWeight: "bold", cursor: "pointer" }}>🚫 PANIC</button>
-        </div>
-
-        <div style={{ display: "flex", gap: "10px", marginTop: "15px" }}>
-          <button onClick={setDidgeridooOnPart1} style={{ flex: 2, padding: "12px", backgroundColor: "#4CAF50", color: "white", border: "none", borderRadius: "4px", fontWeight: "bold", cursor: "pointer" }}>🎵 Set Didgeridoo on Part 1</button>          
-        </div>
 
         <MidiFilePlayer ref={playerRef} selectedOutput={selectedOutput} onMidiEvent={addToLog} partStates={partStates} />
       </div>
