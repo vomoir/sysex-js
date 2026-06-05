@@ -9,6 +9,9 @@ import type { MidiFilePlayerRef } from "./MidiFilePlayer";
 interface PartState {
   instrumentIndex: number;
   drumKitIndex: number;
+  program: number;
+  bankMSB: number;
+  bankLSB: number;
   volume: number;
   pan: number;
   reverb: number;
@@ -16,7 +19,15 @@ interface PartState {
   delay: number;
   muted: boolean;
   soloed: boolean;
-  [key: string]: number | boolean; // Allow dynamic parameter keys
+  // Part Parameters
+  partCutoff: number;
+  partResonance: number;
+  partAttack: number;
+  partDecay: number;
+  partRelease: number;
+  partVibratoRate: number;
+  partVibratoDepth: number;
+  partVibratoDelay: number;
 }
 
 interface Snapshot {
@@ -51,7 +62,15 @@ const PartEditor: React.FC = () => {
       chorus: 0,
       delay: 0,
       muted: false,
-      soloed: false
+      soloed: false,
+      partCutoff: 64,
+      partResonance: 64,
+      partAttack: 64,
+      partDecay: 64,
+      partRelease: 64,
+      partVibratoRate: 64,
+      partVibratoDepth: 64,
+      partVibratoDelay: 64
     }))
   );
 
@@ -247,7 +266,7 @@ const PartEditor: React.FC = () => {
   };
 
   const currentPart = partStates[partIndex];
-  const currentParamValue = (currentPart[selectedParamKey] as number) ?? SC88_ADDRESS_MAP[selectedParamKey].def;
+  const currentParamValue = (currentPart[selectedParamKey as keyof PartState] as number) ?? (SC88_ADDRESS_MAP[selectedParamKey] ? SC88_ADDRESS_MAP[selectedParamKey].def : 0);
 
   const updateCurrentPart = (updates: Partial<PartState>) => {
     setPartStates(prev => {
