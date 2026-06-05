@@ -109,3 +109,20 @@ export const SC88PRO_INSTRUMENTS: GSInstrument[] = [
   { name: "Orchestra Set", program: 48, bankMSB: 120, bankLSB: 0 },
   { name: "SFX Set", program: 56, bankMSB: 120, bankLSB: 0 },
 ];
+
+export const SC88PRO_DRUM_KITS: GSInstrument[] = [
+  { name: "Standard Set", program: 0, bankMSB: 0, bankLSB: 0 },
+  { name: "Room Set", program: 8, bankMSB: 0, bankLSB: 0 },
+  { name: "Power Set", program: 16, bankMSB: 0, bankLSB: 0 },
+  { name: "Electronic Set", program: 24, bankMSB: 0, bankLSB: 0 },
+  { name: "Analog Set (TR-808)", program: 25, bankMSB: 0, bankLSB: 0 },
+  { name: "Jazz Set", program: 32, bankMSB: 0, bankLSB: 0 },
+  { name: "Brush Set", program: 40, bankMSB: 0, bankLSB: 0 },
+  { name: "Orchestra Set", program: 48, bankMSB: 0, bankLSB: 0 },
+  { name: "SFX Set", program: 56, bankMSB: 0, bankLSB: 0 },
+  { name: "Hip Hop Set", program: 1, bankMSB: 0, bankLSB: 0 },
+  { name: "Jungle Set", program: 2, bankMSB: 0, bankLSB: 0 },
+  { name: "Techno Set", program: 3, bankMSB: 0, bankLSB: 0 },
+  { name: "TR-909 Set", program: 4, bankMSB: 0, bankLSB: 0 },
+  { name: "House Set", program: 9, bankMSB: 0, bankLSB: 0 },
+];

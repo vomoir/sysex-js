@@ -1,10 +1,23 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { Output } from "webmidi";
-import { buildRolandSysex, SC88_ADDRESSES, ROLAND_ID, MODEL_ID_SC88PRO, MODEL_ID_GS } from "./utils/rolandSysex";
+import { buildRolandSysex, SC88_ADDRESSES, ROLAND_ID, MODEL_ID_SC88PRO, MODEL_ID_GS, EFX_TYPES } from "./utils/rolandSysex";
 import { midiManager } from "./utils/midiManager";
-import { SC88PRO_INSTRUMENTS } from "./utils/instruments";
+import { SC88PRO_INSTRUMENTS, SC88PRO_DRUM_KITS } from "./utils/instruments";
 import MidiFilePlayer from "./MidiFilePlayer";
 import type { MidiFilePlayerRef } from "./MidiFilePlayer";
+
+interface PartState {
+  instrumentIndex: number;
+  drumKitIndex: number;
+  volume: number;
+  pan: number;
+  reverb: number;
+  chorus: number;
+  delay: number;
+  muted: boolean;
+  soloed: boolean;
+  [key: string]: number | boolean; // Allow dynamic parameter keys
+}
 
 const PartEditor: React.FC = () => {
   const [status, setStatus] = useState<"uninitialized" | "initializing" | "ready" | "error">("uninitialized");
@@ -14,26 +27,106 @@ const PartEditor: React.FC = () => {
   const [partIndex, setPartIndex] = useState(0); 
   
   // Manage state for all 16 parts
-  const [partStates, setPartStates] = useState(
+  const [partStates, setPartStates] = useState<PartState[]>(
     Array.from({ length: 16 }, () => ({
       instrumentIndex: 0,
+      drumKitIndex: 0,
       volume: 100,
       pan: 64,
       reverb: 40,
+      chorus: 0,
+      delay: 0,
       muted: false,
       soloed: false
     }))
   );
   
   const [lcdText, setLcdText] = useState("HELLO SC-88 PRO");
+  const [selectedParamKey, setSelectedParamKey] = useState<string>("partCutoff");
+  
+  // EFX State
+  const [efxTypeIndex, setEfxTypeIndex] = useState(0);
+  const [efxSource, setEfxSource] = useState(0); // 0-15 for Part 1-16
+  const [efxParams, setEfxParams] = useState<number[]>(Array(20).fill(64));
+
+  // Drum Setup State
+  const [selectedDrumNote, setSelectedDrumNote] = useState(36); // Default to Kick Drum
+  const [drumSetupIndex, setDrumSetupIndex] = useState(0); // Setup 1 or 2
+
   const [useSysex] = useState(true);
   const [sysexLog, setSysexLog] = useState<{ id: number, data: string, timestamp: string }[]>([]);
   
   const playerRef = React.useRef<MidiFilePlayerRef>(null);
 
-  const currentPart = partStates[partIndex];
+  const DRUM_NOTE_NAMES: Record<number, string> = {
+    27: "High Q", 28: "Slap", 29: "Scratch Push", 30: "Scratch Pull", 31: "Sticks", 32: "Square Click", 
+    33: "Metronome Click", 34: "Metronome Bell", 35: "Kick Drum 2", 36: "Kick Drum 1", 37: "Side Stick", 
+    38: "Snare Drum 1", 39: "Hand Clap", 40: "Snare Drum 2", 41: "Low Tom 2", 42: "Closed Hi-hat", 
+    43: "Low Tom 1", 44: "Pedal Hi-hat", 45: "Mid Tom 2", 46: "Open Hi-hat", 47: "Mid Tom 1", 
+    48: "High Tom 2", 49: "Crash Cymbal 1", 50: "High Tom 1", 51: "Ride Cymbal 1", 52: "Chinese Cymbal", 
+    53: "Ride Bell", 54: "Tambourine", 55: "Splash Cymbal", 56: "Cowbell", 57: "Crash Cymbal 2", 
+    58: "Vibraslap", 59: "Ride Cymbal 2", 60: "High Bongo", 61: "Low Bongo", 62: "Mute High Conga", 
+    63: "Open High Conga", 64: "Low Conga", 65: "High Timbale", 66: "Low Timbale", 67: "High Agogo", 
+    68: "Low Agogo", 69: "Cabasa", 70: "Maracas", 71: "Short Whistle", 72: "Long Whistle", 
+    73: "Short Guiro", 74: "Long Guiro", 75: "Claves", 76: "High Wood Block", 77: "Low Wood Block", 
+    78: "Mute Cuica", 79: "Open Cuica", 80: "Mute Triangle", 81: "Open Triangle", 82: "Shaker", 
+    83: "Jingle Bell", 84: "Bell Tree", 85: "Castanets", 86: "Mute Surdo", 87: "Open Surdo"
+  };
 
-  const updateCurrentPart = (updates: Partial<typeof currentPart>) => {
+  const handleDrumParamChange = (paramAddrFunc: (ds: number, note: number) => number[], val: number) => {
+    sendParameter(paramAddrFunc(drumSetupIndex, selectedDrumNote), val, MODEL_ID_GS);
+  };
+
+  const playSelectedDrumNote = () => {
+    if (!selectedOutput) return;
+    const channel = 10; // Drums are always Ch 10
+    try {
+      // Trigger the note at velocity 100 for 200ms
+      selectedOutput.playNote(selectedDrumNote, { channels: channel, duration: 200, attack: 100 / 127 });
+      addToLog([0x90 + channel - 1, selectedDrumNote, 0x64]); 
+    } catch (err) {
+      console.error("[DrumTrigger] Error:", err);
+    }
+  };
+
+  const handleEfxTypeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const idx = parseInt(e.target.value);
+    setEfxTypeIndex(idx);
+    // EFX Type is MSB/LSB. Most SC-88 Pro EFX are in MSB=0, LSB=idx
+    sendParameter(SC88_ADDRESSES.EFX_TYPE_MSB, 0, MODEL_ID_SC88PRO);
+    sendParameter(SC88_ADDRESSES.EFX_TYPE_LSB, idx, MODEL_ID_SC88PRO);
+  };
+
+  const handleEfxSourceChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const src = parseInt(e.target.value);
+    setEfxSource(src);
+    sendParameter(SC88_ADDRESSES.EFX_SOURCE, src, MODEL_ID_SC88PRO);
+  };
+
+  const handleEfxParamChange = (index: number, val: number) => {
+    const next = [...efxParams];
+    next[index] = val;
+    setEfxParams(next);
+    sendParameter(SC88_ADDRESSES.efxParameter(index), val, MODEL_ID_SC88PRO);
+  };
+
+  const SC88_ADDRESS_MAP: Record<string, { label: string, addr: (idx: number) => number[], min: number, max: number, def: number }> = {
+    partCutoff: { label: "Cutoff Frequency", addr: SC88_ADDRESSES.partCutoff, min: 0, max: 127, def: 64 },
+    partResonance: { label: "Resonance", addr: SC88_ADDRESSES.partResonance, min: 0, max: 127, def: 64 },
+    partAttack: { label: "Attack Time", addr: SC88_ADDRESSES.partAttack, min: 0, max: 127, def: 64 },
+    partDecay: { label: "Decay Time", addr: SC88_ADDRESSES.partDecay, min: 0, max: 127, def: 64 },
+    partRelease: { label: "Release Time", addr: SC88_ADDRESSES.partRelease, min: 0, max: 127, def: 64 },
+    partChorus: { label: "Chorus Send", addr: SC88_ADDRESSES.partChorus, min: 0, max: 127, def: 0 },
+    partDelay: { label: "Delay Send", addr: SC88_ADDRESSES.partDelay, min: 0, max: 127, def: 0 },
+    partVibratoRate: { label: "Vibrato Rate", addr: SC88_ADDRESSES.partVibratoRate, min: 0, max: 127, def: 64 },
+    partVibratoDepth: { label: "Vibrato Depth", addr: SC88_ADDRESSES.partVibratoDepth, min: 0, max: 127, def: 64 },
+    partVibratoDelay: { label: "Vibrato Delay", addr: SC88_ADDRESSES.partVibratoDelay, min: 0, max: 127, def: 64 },
+  };
+
+  const currentPart = partStates[partIndex];
+  const currentParamValue = (currentPart[selectedParamKey] as number) ?? SC88_ADDRESS_MAP[selectedParamKey].def;
+
+  const updateCurrentPart = (updates: Partial<PartState>) => {
     setPartStates(prev => {
       const next = [...prev];
       next[partIndex] = { ...next[partIndex], ...updates };
@@ -152,6 +245,18 @@ const setDidgeridooOnPart1 = () => {
     sendParameter(SC88_ADDRESSES.partReverb(partIndex), val);
   };
 
+  const handleChorusChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseInt(e.target.value);
+    updateCurrentPart({ chorus: val });
+    sendParameter(SC88_ADDRESSES.partChorus(partIndex), val);
+  };
+
+  const handleDelayChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseInt(e.target.value);
+    updateCurrentPart({ delay: val });
+    sendParameter(SC88_ADDRESSES.partDelay(partIndex), val, MODEL_ID_SC88PRO);
+  };
+
   const handleInstrumentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const idx = parseInt(e.target.value);
     updateCurrentPart({ instrumentIndex: idx });
@@ -167,6 +272,21 @@ const setDidgeridooOnPart1 = () => {
     }
   };
 
+  const handleDrumKitChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const idx = parseInt(e.target.value);
+    updateCurrentPart({ drumKitIndex: idx });
+    const kit = SC88PRO_DRUM_KITS[idx];
+    if (selectedOutput && kit) {
+      const channel = 10; // Drums are always Ch 10
+      selectedOutput.sendControlChange(0, kit.bankMSB, { channels: channel });
+      selectedOutput.sendControlChange(32, kit.bankLSB, { channels: channel });
+      selectedOutput.sendProgramChange(kit.program, { channels: channel });
+      addToLog([0xB0 + channel - 1, 0x00, kit.bankMSB]);
+      addToLog([0xB0 + channel - 1, 0x20, kit.bankLSB]);
+      addToLog([0xC0 + channel - 1, kit.program]);
+    }
+  };
+
   const toggleMute = () => {
     updateCurrentPart({ muted: !currentPart.muted });
   };
@@ -177,6 +297,13 @@ const setDidgeridooOnPart1 = () => {
 
   const resetAllMuteSolo = () => {
     setPartStates(prev => prev.map(p => ({ ...p, muted: false, soloed: false })));
+  };
+
+  const handleParamChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseInt(e.target.value);
+    const param = SC88_ADDRESS_MAP[selectedParamKey];
+    updateCurrentPart({ [selectedParamKey]: val });
+    sendParameter(param.addr(partIndex), val);
   };
 
   const handleLcdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -312,6 +439,111 @@ const setDidgeridooOnPart1 = () => {
           <input type="range" min="0" max="127" value={currentPart.reverb} onChange={handleReverbChange} style={{ width: "100%" }} />
         </div>
 
+        <div style={{ marginBottom: "10px" }}>
+          <label>Chorus ({currentPart.chorus})</label>
+          <input type="range" min="0" max="127" value={currentPart.chorus} onChange={handleChorusChange} style={{ width: "100%" }} />
+        </div>
+
+        <div style={{ marginBottom: "10px" }}>
+          <label>Delay ({currentPart.delay})</label>
+          <input type="range" min="0" max="127" value={currentPart.delay} onChange={handleDelayChange} style={{ width: "100%" }} />
+        </div>
+
+        <div style={{ marginBottom: "10px" }}>
+          <label>EFX Send (SC-88 Pro Mode)</label>
+          <input 
+            type="range" 
+            min="0" 
+            max="127" 
+            defaultValue={0} 
+            onChange={(e) => sendParameter(SC88_ADDRESSES.sc88PartEfxSend(partIndex), parseInt(e.target.value), MODEL_ID_SC88PRO)} 
+            style={{ width: "100%" }} 
+          />
+        </div>
+
+        <div style={{ padding: "10px", backgroundColor: "#333", borderRadius: "4px", marginBottom: "15px" }}>
+          <h5 style={{ margin: "0 0 8px 0" }}>Part Parameter Editor</h5>
+          <select 
+            value={selectedParamKey} 
+            onChange={(e) => setSelectedParamKey(e.target.value)}
+            style={{ width: "100%", marginBottom: "8px", padding: "4px" }}
+          >
+            {Object.entries(SC88_ADDRESS_MAP).map(([key, info]) => (
+              <option key={key} value={key}>{info.label}</option>
+            ))}
+          </select>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <input 
+              type="range" 
+              min={SC88_ADDRESS_MAP[selectedParamKey].min} 
+              max={SC88_ADDRESS_MAP[selectedParamKey].max} 
+              value={currentParamValue} 
+              onChange={handleParamChange} 
+              style={{ flex: 1 }} 
+            />
+            <span style={{ minWidth: "30px", textAlign: "right" }}>{currentParamValue}</span>
+          </div>
+        </div>
+
+        {/* DRUM NOTE EDITOR (Only for Part 10) */}
+        {partIndex === 9 && (
+          <div style={{ padding: "15px", backgroundColor: "#2c3e50", borderRadius: "8px", border: "1px solid #34495e", marginBottom: "15px" }}>
+            <h4 style={{ margin: "0 0 10px 0", color: "#ecf0f1" }}>🥁 Drum Note Editor</h4>
+            
+            <div style={{ marginBottom: "10px" }}>
+              <label style={{ fontSize: "0.8em", color: "#bdc3c7" }}>Select Drum Kit</label>
+              <select 
+                value={currentPart.drumKitIndex} 
+                onChange={handleDrumKitChange}
+                style={{ width: "100%", padding: "4px", backgroundColor: "#34495e", color: "white", border: "none", marginBottom: "10px" }}
+              >
+                {SC88PRO_DRUM_KITS.map((kit, i) => <option key={i} value={i}>{kit.name}</option>)}
+              </select>
+
+              <label style={{ fontSize: "0.8em", color: "#bdc3c7" }}>Select Drum Instrument</label>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <select 
+                  value={selectedDrumNote} 
+                  onChange={(e) => setSelectedDrumNote(parseInt(e.target.value))}
+                  style={{ flex: 1, padding: "4px", backgroundColor: "#34495e", color: "white", border: "none" }}
+                >
+                  {Object.entries(DRUM_NOTE_NAMES).map(([note, name]) => (
+                    <option key={note} value={note}>{note}: {name}</option>
+                  ))}
+                </select>
+                <button 
+                  onClick={playSelectedDrumNote}
+                  style={{ padding: "4px 10px", backgroundColor: "#e67e22", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", fontWeight: "bold" }}
+                >
+                  🔊 Trigger
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              {[
+                { label: "Level", func: SC88_ADDRESSES.drumNoteLevel },
+                { label: "Pan", func: SC88_ADDRESSES.drumNotePan },
+                { label: "Reverb", func: SC88_ADDRESSES.drumNoteReverb },
+                { label: "Chorus", func: SC88_ADDRESSES.drumNoteChorus },
+                { label: "Delay", func: SC88_ADDRESSES.drumNoteDelay },
+              ].map((param) => (
+                <div key={param.label} style={{ fontSize: "0.75em" }}>
+                  <label style={{ display: "block", marginBottom: "2px" }}>{param.label}</label>
+                  <input 
+                    type="range" 
+                    min="0" max="127" 
+                    defaultValue={64}
+                    onChange={(e) => handleDrumParamChange(param.func, parseInt(e.target.value))} 
+                    style={{ width: "100%" }}
+                  />
+                </div>
+              ))}
+            </div>
+            <p style={{ fontSize: "0.65em", color: "#95a5a6", marginTop: "10px" }}>Changes apply to the individual drum sound in the current kit.</p>
+          </div>
+        )}
+
         <hr style={{ borderColor: "#444" }} />
         <h4 style={{ margin: "10px 0" }}>LCD Display</h4>
         <input type="text" value={lcdText} onChange={handleLcdChange} maxLength={16} style={{ width: "100%", padding: "8px", backgroundColor: "#333", color: "#0f0", border: "1px solid #555", fontFamily: "monospace" }} />
@@ -329,8 +561,44 @@ const setDidgeridooOnPart1 = () => {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "20px", height: "100%" }}>
+        <div style={{ padding: "20px", border: "1px solid #444", borderRadius: "8px", backgroundColor: "#222", color: "#eee" }}>
+          <h3 style={{ margin: "0 0 15px 0" }}>EFX (Multi-Effects) Editor</h3>
+          
+          <div style={{ marginBottom: "15px" }}>
+            <label style={{ display: "block", marginBottom: "5px" }}>EFX Type</label>
+            <select value={efxTypeIndex} onChange={handleEfxTypeChange} style={{ width: "100%", padding: "4px" }}>
+              {EFX_TYPES.map((name, i) => <option key={i} value={i}>{i}: {name}</option>)}
+            </select>
+          </div>
+
+          <div style={{ marginBottom: "15px" }}>
+            <label style={{ display: "block", marginBottom: "5px" }}>EFX Source (Routing)</label>
+            <select value={efxSource} onChange={handleEfxSourceChange} style={{ width: "100%", padding: "4px" }}>
+              {Array.from({ length: 16 }).map((_, i) => <option key={i} value={i}>Part {i + 1}</option>)}
+              <option key={16} value={16}>OFF</option>
+            </select>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+            {Array.from({ length: 10 }).map((_, i) => (
+              <div key={i} style={{ fontSize: "0.8em" }}>
+                <label style={{ display: "block" }}>Param {i + 1} ({efxParams[i]})</label>
+                <input 
+                  type="range" 
+                  min="0" max="127" 
+                  value={efxParams[i]} 
+                  onChange={(e) => handleEfxParamChange(i, parseInt(e.target.value))} 
+                  style={{ width: "100%" }}
+                />
+              </div>
+            ))}
+          </div>
+          <p style={{ fontSize: "0.7em", color: "#888", marginTop: "10px" }}>Note: Each EFX type uses these 20 generic parameters differently. Consult the SC-88 Pro manual for specific mappings.</p>
+        </div>
+
         <div style={{ 
-          height: "600px", 
+          flex: 1,
+          height: "400px", 
           display: "flex", 
           flexDirection: "column", 
           padding: "20px", 

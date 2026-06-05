@@ -74,19 +74,45 @@ export const SC88_ADDRESSES = {
   
   partPan: (partIndex: number) => [0x40, getPartAddressOffset(partIndex), 0x0E],
   partReverb: (partIndex: number) => [0x40, getPartAddressOffset(partIndex), 0x10],
+  partChorus: (partIndex: number) => [0x40, getPartAddressOffset(partIndex), 0x11],
+  partDelay: (partIndex: number) => [0x40, getPartAddressOffset(partIndex), 0x12],
+  partCutoff: (partIndex: number) => [0x40, getPartAddressOffset(partIndex), 0x20],
+  partResonance: (partIndex: number) => [0x40, getPartAddressOffset(partIndex), 0x21],
+  partAttack: (partIndex: number) => [0x40, getPartAddressOffset(partIndex), 0x63],
+  partDecay: (partIndex: number) => [0x40, getPartAddressOffset(partIndex), 0x64],
+  partRelease: (partIndex: number) => [0x40, getPartAddressOffset(partIndex), 0x66],
+  partVibratoRate: (partIndex: number) => [0x40, getPartAddressOffset(partIndex), 0x1A],
+  partVibratoDepth: (partIndex: number) => [0x40, getPartAddressOffset(partIndex), 0x1B],
+  partVibratoDelay: (partIndex: number) => [0x40, getPartAddressOffset(partIndex), 0x1C],
   partSwitch: (partIndex: number) => [0x40, getPartAddressOffset(partIndex), 0x02], // 0: Off, 1: On
 
   // EFX Parameters (Model ID: 0x45 usually required for deep SC-88 Pro features)
-  EFX_TYPE: [0x40, 0x03, 0x00],
-  EFX_PARAMETER_1: [0x40, 0x03, 0x03],
+  EFX_TYPE_MSB: [0x40, 0x03, 0x00],
+  EFX_TYPE_LSB: [0x40, 0x03, 0x01],
   EFX_SWITCH: [0x40, 0x03, 0x02], // 0: Off, 1: On
+  EFX_SOURCE: [0x40, 0x03, 0x02], // On SC-88 Pro, 0x02 is often Source (0-15 for Part 1-16, 16 for Off?) 
+                                 // Actually, 40 03 02 is often "EFX Source" in SC-88 Pro mode.
+  
+  // EFX Parameters 1-20 are at 40 03 03 through 40 03 16
+  efxParameter: (index: number) => [0x40, 0x03, 0x03 + index], 
 
   // Part EFX Send (Model ID: 0x45)
   // Native SC-88 Pro part addresses are 40 4x xx for some parameters
+  // 40 4x 22 is "Part EFX Send Depth"
   sc88PartEfxSend: (partIndex: number) => {
-    const offset = [0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x10, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F][partIndex];
-    return [0x40, offset + 0x30, 0x22]; // 40 4x 22
+    const partAddr = [0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x40, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F][partIndex];
+    return [0x40, partAddr, 0x22];
   },
+
+  // Drum Setup Parameters (GS Standard)
+  // drumSet: 0 (Setup 1) or 1 (Setup 2)
+  // note: MIDI Note Number (0-127)
+  drumNotePitch: (drumSet: number, note: number) => [0x41, drumSet, note, 0x00],
+  drumNoteLevel: (drumSet: number, note: number) => [0x41, drumSet, note, 0x03],
+  drumNotePan: (drumSet: number, note: number) => [0x41, drumSet, note, 0x04],
+  drumNoteReverb: (drumSet: number, note: number) => [0x41, drumSet, note, 0x05],
+  drumNoteChorus: (drumSet: number, note: number) => [0x41, drumSet, note, 0x06],
+  drumNoteDelay: (drumSet: number, note: number) => [0x41, drumSet, note, 0x07],
 
   // LCD Display (Model ID: 0x45)
   // Max 16 characters for the main display line
