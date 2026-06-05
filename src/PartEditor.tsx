@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { Output } from "webmidi";
 import { buildRolandSysex, SC88_ADDRESSES, ROLAND_ID, MODEL_ID_SC88PRO, MODEL_ID_GS, EFX_TYPES } from "./utils/rolandSysex";
 import { midiManager } from "./utils/midiManager";
-import { SC88PRO_INSTRUMENTS, SC88PRO_DRUM_KITS } from "./utils/instruments";
+import { SC88PRO_INSTRUMENTS, SC88PRO_DRUM_KITS, GM_INSTRUMENT_NAMES } from "./utils/instruments";
 import MidiFilePlayer from "./MidiFilePlayer";
 import type { MidiFilePlayerRef } from "./MidiFilePlayer";
 
@@ -42,6 +42,9 @@ const PartEditor: React.FC = () => {
     Array.from({ length: 16 }, () => ({
       instrumentIndex: 0,
       drumKitIndex: 0,
+      program: 0,
+      bankMSB: 0,
+      bankLSB: 0,
       volume: 100,
       pan: 64,
       reverb: 40,
@@ -51,6 +54,25 @@ const PartEditor: React.FC = () => {
       soloed: false
     }))
   );
+
+  const handleManualToneChange = (updates: Partial<{ program: number, bankMSB: number, bankLSB: number }>) => {
+    const nextProgram = updates.program !== undefined ? updates.program : currentPart.program;
+    const nextBankMSB = updates.bankMSB !== undefined ? updates.bankMSB : currentPart.bankMSB;
+    const nextBankLSB = updates.bankLSB !== undefined ? updates.bankLSB : currentPart.bankLSB;
+
+    updateCurrentPart({ program: nextProgram, bankMSB: nextBankMSB, bankLSB: nextBankLSB });
+
+    if (selectedOutput) {
+      const channel = partIndex + 1;
+      selectedOutput.sendControlChange(0, nextBankMSB, { channels: channel });
+      selectedOutput.sendControlChange(32, nextBankLSB, { channels: channel });
+      selectedOutput.sendProgramChange(nextProgram, { channels: channel });
+      
+      addToLog([0xB0 + channel - 1, 0x00, nextBankMSB]);
+      addToLog([0xB0 + channel - 1, 0x20, nextBankLSB]);
+      addToLog([0xC0 + channel - 1, nextProgram]);
+    }
+  };
   
   const [lcdText, setLcdText] = useState("HELLO SC-88 PRO");
   const [selectedParamKey, setSelectedParamKey] = useState<string>("partCutoff");
@@ -476,10 +498,50 @@ const setDidgeridooOnPart1 = () => {
         </div>
 
         <div style={{ marginBottom: "15px" }}>
-          <label>Instrument: </label>
+          <label>Instrument (Quick Select): </label>
           <select value={currentPart.instrumentIndex} onChange={handleInstrumentChange} style={{ width: "100%", padding: "4px" }}>
             {SC88PRO_INSTRUMENTS.map((inst, i) => <option key={i} value={i}>{inst.name}</option>)}
           </select>
+        </div>
+
+        {/* DEEP TONE SELECTION */}
+        <div style={{ padding: "10px", backgroundColor: "#333", borderRadius: "4px", marginBottom: "15px", border: "1px solid #444" }}>
+          <h5 style={{ margin: "0 0 8px 0", color: "#aaa" }}>Deep Tone Selection</h5>
+          <div style={{ marginBottom: "8px" }}>
+            <label style={{ fontSize: "0.75em", display: "block" }}>Program (1-128)</label>
+            <select 
+              value={currentPart.program} 
+              onChange={(e) => handleManualToneChange({ program: parseInt(e.target.value) })}
+              style={{ width: "100%", padding: "2px", fontSize: "0.85em" }}
+            >
+              {Array.from({ length: 128 }).map((_, i) => (
+                <option key={i} value={i}>{i + 1}: {GM_INSTRUMENT_NAMES[i] || "Unknown"}</option>
+              ))}
+            </select>
+          </div>
+          <div style={{ display: "flex", gap: "10px" }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: "0.75em", display: "block" }}>Variation (CC 0)</label>
+              <input 
+                type="number" min="0" max="127" 
+                value={currentPart.bankMSB} 
+                onChange={(e) => handleManualToneChange({ bankMSB: parseInt(e.target.value) || 0 })}
+                style={{ width: "100%", padding: "2px" }}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: "0.75em", display: "block" }}>Map (CC 32)</label>
+              <select 
+                value={currentPart.bankLSB} 
+                onChange={(e) => handleManualToneChange({ bankLSB: parseInt(e.target.value) })}
+                style={{ width: "100%", padding: "2px" }}
+              >
+                <option value={0}>0: Native</option>
+                <option value={1}>1: SC-88</option>
+                <option value={2}>2: SC-55</option>
+              </select>
+            </div>
+          </div>
         </div>
 
         <div style={{ display: "flex", gap: "10px", marginBottom: "15px" }}>
