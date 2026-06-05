@@ -19,6 +19,17 @@ interface PartState {
   [key: string]: number | boolean; // Allow dynamic parameter keys
 }
 
+interface Snapshot {
+  name: string;
+  data: {
+    partStates: PartState[];
+    efxTypeIndex: number;
+    efxSource: number;
+    efxParams: number[];
+    lcdText: string;
+  };
+}
+
 const PartEditor: React.FC = () => {
   const [status, setStatus] = useState<"uninitialized" | "initializing" | "ready" | "error">("uninitialized");
   const [outputs, setOutputs] = useState<Output[]>([]);
@@ -51,10 +62,24 @@ const PartEditor: React.FC = () => {
 
   // Drum Setup State
   const [selectedDrumNote, setSelectedDrumNote] = useState(36); // Default to Kick Drum
-  const [drumSetupIndex, setDrumSetupIndex] = useState(0); // Setup 1 or 2
+  const drumSetupIndex = 0; // Setup 1 or 2
+
+  // Snapshots State
+  const [snapshots, setSnapshots] = useState<Snapshot[]>(() => {
+    const saved = localStorage.getItem("sc88_snapshots");
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [snapshotName, setSnapshotName] = useState("");
 
   const [useSysex] = useState(true);
   const [sysexLog, setSysexLog] = useState<{ id: number, data: string, timestamp: string }[]>([]);
+  const [isMonitoring, setIsMonitoring] = useState(true);
+  const isMonitoringRef = React.useRef(true);
+
+  // Sync ref with state
+  useEffect(() => {
+    isMonitoringRef.current = isMonitoring;
+  }, [isMonitoring]);
   
   const playerRef = React.useRef<MidiFilePlayerRef>(null);
 
@@ -110,6 +135,82 @@ const PartEditor: React.FC = () => {
     sendParameter(SC88_ADDRESSES.efxParameter(index), val, MODEL_ID_SC88PRO);
   };
 
+  const saveSnapshot = () => {
+    if (!snapshotName.trim()) return;
+    const newSnapshot = {
+      name: snapshotName,
+      data: {
+        partStates,
+        efxTypeIndex,
+        efxSource,
+        efxParams,
+        lcdText
+      }
+    };
+    const nextSnapshots = [...snapshots, newSnapshot];
+    setSnapshots(nextSnapshots);
+    localStorage.setItem("sc88_snapshots", JSON.stringify(nextSnapshots));
+    setSnapshotName("");
+  };
+
+  const loadSnapshot = (snapshot: Snapshot) => {
+    const { data } = snapshot;
+    setPartStates(data.partStates);
+    setEfxTypeIndex(data.efxTypeIndex);
+    setEfxSource(data.efxSource);
+    setEfxParams(data.efxParams);
+    setLcdText(data.lcdText);
+
+    if (!selectedOutput) return;
+
+    // Restore Hardware State
+    // 1. Restore Parts
+    data.partStates.forEach((part: PartState, i: number) => {
+      const channel = i + 1;
+      const inst = SC88PRO_INSTRUMENTS[part.instrumentIndex];
+      const kit = SC88PRO_DRUM_KITS[part.drumKitIndex];
+
+      // Volume, Pan, Effects
+      sendParameter(SC88_ADDRESSES.partLevel(i), part.volume);
+      sendParameter(SC88_ADDRESSES.partPan(i), part.pan);
+      sendParameter(SC88_ADDRESSES.partReverb(i), part.reverb);
+      sendParameter(SC88_ADDRESSES.partChorus(i), part.chorus);
+      sendParameter(SC88_ADDRESSES.partDelay(i), part.delay, MODEL_ID_SC88PRO);
+
+      // Instruments / Kits
+      if (i === 9) {
+        selectedOutput.sendControlChange(0, kit.bankMSB, { channels: channel });
+        selectedOutput.sendControlChange(32, kit.bankLSB, { channels: channel });
+        selectedOutput.sendProgramChange(kit.program, { channels: channel });
+      } else {
+        selectedOutput.sendControlChange(0, inst.bankMSB, { channels: channel });
+        selectedOutput.sendControlChange(32, inst.bankLSB, { channels: channel });
+        selectedOutput.sendProgramChange(inst.program, { channels: channel });
+      }
+    });
+
+    // 2. Restore EFX
+    sendParameter(SC88_ADDRESSES.EFX_TYPE_MSB, 0, MODEL_ID_SC88PRO);
+    sendParameter(SC88_ADDRESSES.EFX_TYPE_LSB, data.efxTypeIndex, MODEL_ID_SC88PRO);
+    sendParameter(SC88_ADDRESSES.EFX_SOURCE, data.efxSource, MODEL_ID_SC88PRO);
+    data.efxParams.forEach((val: number, i: number) => {
+      sendParameter(SC88_ADDRESSES.efxParameter(i), val, MODEL_ID_SC88PRO);
+    });
+
+    // 3. Restore LCD
+    const asciiBytes = data.lcdText.toUpperCase().split("").map((char: string) => char.charCodeAt(0));
+    while (asciiBytes.length < 16) asciiBytes.push(32);
+    sendParameter(SC88_ADDRESSES.LCD_DISPLAY, asciiBytes, MODEL_ID_SC88PRO);
+
+    addToLog(["[System] Loaded Snapshot:", snapshot.name]);
+  };
+
+  const deleteSnapshot = (index: number) => {
+    const next = snapshots.filter((_, i) => i !== index);
+    setSnapshots(next);
+    localStorage.setItem("sc88_snapshots", JSON.stringify(next));
+  };
+
   const SC88_ADDRESS_MAP: Record<string, { label: string, addr: (idx: number) => number[], min: number, max: number, def: number }> = {
     partCutoff: { label: "Cutoff Frequency", addr: SC88_ADDRESSES.partCutoff, min: 0, max: 127, def: 64 },
     partResonance: { label: "Resonance", addr: SC88_ADDRESSES.partResonance, min: 0, max: 127, def: 64 },
@@ -135,6 +236,8 @@ const PartEditor: React.FC = () => {
   };
 
   const addToLog = useCallback((bytes: (number | string | undefined)[]) => {
+    if (!isMonitoringRef.current) return;
+    
     // Filter and convert bytes to hex
     const validBytes = bytes.filter((b): b is number | string => b !== undefined);
     const hex = validBytes.map(b => {
@@ -297,6 +400,11 @@ const setDidgeridooOnPart1 = () => {
 
   const resetAllMuteSolo = () => {
     setPartStates(prev => prev.map(p => ({ ...p, muted: false, soloed: false })));
+  };
+
+  const clearLog = () => {
+    console.log("[Monitor] Clearing log...");
+    setSysexLog([]);
   };
 
   const handleParamChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -597,7 +705,6 @@ const setDidgeridooOnPart1 = () => {
         </div>
 
         <div style={{ 
-          flex: 1,
           height: "400px", 
           display: "flex", 
           flexDirection: "column", 
@@ -624,7 +731,67 @@ const setDidgeridooOnPart1 = () => {
               </div>
             ))}
           </div>
-          <button onClick={() => setSysexLog([])} style={{ marginTop: "10px", padding: "5px", backgroundColor: "#333", color: "#ccc", border: "none", borderRadius: "4px", cursor: "pointer" }}>Clear</button>
+          <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+            <button 
+              onClick={() => setIsMonitoring(!isMonitoring)} 
+              style={{ 
+                flex: 1, 
+                padding: "5px", 
+                backgroundColor: isMonitoring ? "#27ae60" : "#c0392b", 
+                color: "white", 
+                border: "none", 
+                borderRadius: "4px", 
+                cursor: "pointer",
+                fontSize: "0.8em",
+                fontWeight: "bold"
+              }}
+            >
+              {isMonitoring ? "🟢 Monitoring ON" : "🔴 Monitoring OFF"}
+            </button>
+            <button onClick={clearLog} style={{ flex: 1, padding: "5px", backgroundColor: "#333", color: "#ccc", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "0.8em" }}>Clear</button>
+          </div>
+        </div>
+
+        {/* SNAPSHOTS & SCENES */}
+        <div style={{ padding: "20px", border: "1px solid #444", borderRadius: "8px", backgroundColor: "#222", color: "#eee" }}>
+          <h3 style={{ margin: "0 0 15px 0" }}>Snapshots & Scenes</h3>
+          <div style={{ display: "flex", gap: "10px", marginBottom: "15px" }}>
+            <input 
+              type="text" 
+              placeholder="Snapshot Name..." 
+              value={snapshotName} 
+              onChange={(e) => setSnapshotName(e.target.value)}
+              style={{ flex: 1, padding: "8px", backgroundColor: "#333", color: "white", border: "1px solid #555", borderRadius: "4px" }}
+            />
+            <button 
+              onClick={saveSnapshot}
+              style={{ padding: "8px 15px", backgroundColor: "#27ae60", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", fontWeight: "bold" }}
+            >
+              💾 Save
+            </button>
+          </div>
+
+          <div style={{ maxHeight: "200px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "5px" }}>
+            {snapshots.length === 0 && <p style={{ fontSize: "0.8em", color: "#666", textAlign: "center" }}>No snapshots saved yet.</p>}
+            {snapshots.map((snap, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px", backgroundColor: "#333", borderRadius: "4px" }}>
+                <span style={{ flex: 1, fontSize: "0.9em" }}>{snap.name}</span>
+                <button 
+                  onClick={() => loadSnapshot(snap)}
+                  style={{ padding: "4px 10px", backgroundColor: "#2980b9", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "0.8em" }}
+                >
+                  📂 Load
+                </button>
+                <button 
+                  onClick={() => deleteSnapshot(i)}
+                  style={{ padding: "4px 8px", backgroundColor: "#c0392b", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "0.8em" }}
+                >
+                  🗑️
+                </button>
+              </div>
+            ))}
+          </div>
+          <p style={{ fontSize: "0.7em", color: "#888", marginTop: "10px" }}>Snapshots are saved to your browser's local storage.</p>
         </div>
       </div>
     </div>
