@@ -27,6 +27,8 @@ const MidiFilePlayer = forwardRef<MidiFilePlayerRef, MidiFilePlayerProps>(({ sel
   const [isPlaying, setIsPlaying] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+  const [fileLoadStatus, setFileLoadStatus] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [fileLoadError, setFileLoadError] = useState<string | null>(null);
   const playerRef = useRef<MidiPlayer.Player | null>(null);
   const songDataRef = useRef<ArrayBuffer | null>(null);
   
@@ -36,17 +38,13 @@ const MidiFilePlayer = forwardRef<MidiFilePlayerRef, MidiFilePlayerProps>(({ sel
   const partStatesRef = useRef(partStates);
   const lastProgressUpdateRef = useRef(0);
 
+  // Keep the current output and callback available synchronously in the player callback.
+  selectedOutputRef.current = selectedOutput;
+  onMidiEventRef.current = onMidiEvent;
+
   useImperativeHandle(ref, () => ({
     stop: stopPlayback
   }));
-
-  useEffect(() => {
-    selectedOutputRef.current = selectedOutput;
-  }, [selectedOutput]);
-
-  useEffect(() => {
-    onMidiEventRef.current = onMidiEvent;
-  }, [onMidiEvent]);
 
   // Track partStates changes to handle immediate muting of active channels
   useEffect(() => {
@@ -195,21 +193,37 @@ const MidiFilePlayer = forwardRef<MidiFilePlayerRef, MidiFilePlayerProps>(({ sel
       setProgress(0);
 
       const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result instanceof ArrayBuffer) {
-          songDataRef.current = event.target.result;
+      setFileLoadStatus("loading");
+      setFileLoadError(null);
+      songDataRef.current = null;
+
+      reader.onload = () => {
+        const result = reader.result;
+        if (result instanceof ArrayBuffer) {
+          songDataRef.current = result;
           if (playerRef.current) {
             try {
-              playerRef.current.loadArrayBuffer(event.target.result);
+              playerRef.current.loadArrayBuffer(result);
+              setFileLoadStatus("loaded");
             } catch (err) {
               console.error("[Player] Load Error:", err);
+              setFileLoadError("Failed to parse MIDI file.");
+              setFileLoadStatus("error");
               setFileName(null);
             }
           }
+        } else {
+          console.error("[Player] Unexpected FileReader result type:", typeof result, result);
+          setFileLoadError("Invalid MIDI file format.");
+          setFileLoadStatus("error");
+          setFileName(null);
         }
       };
+
       reader.onerror = () => {
-        console.error("[Player] File Read Error");
+        console.error("[Player] File Read Error", reader.error);
+        setFileLoadError(reader.error?.message || "Failed to load MIDI file.");
+        setFileLoadStatus("error");
         setFileName(null);
       };
       reader.readAsArrayBuffer(file);
@@ -255,13 +269,22 @@ const MidiFilePlayer = forwardRef<MidiFilePlayerRef, MidiFilePlayerProps>(({ sel
             <div style={{ width: `${progress}%`, height: "100%", backgroundColor: "#4CAF50", transition: "width 0.1s linear" }} />
           </div>
           <div style={{ display: "flex", gap: "10px" }}>
-            <button onClick={togglePlay} disabled={!selectedOutput} style={{ flex: 1, padding: "10px", backgroundColor: isPlaying ? "#f39c12" : "#27ae60", color: "white", border: "none", borderRadius: "4px", cursor: selectedOutput ? "pointer" : "not-allowed", fontWeight: "bold" }}>
+            <button onClick={togglePlay} disabled={!selectedOutput || !songDataRef.current} style={{ flex: 1, padding: "10px", backgroundColor: isPlaying ? "#f39c12" : "#27ae60", color: "white", border: "none", borderRadius: "4px", cursor: selectedOutput && songDataRef.current ? "pointer" : "not-allowed", fontWeight: "bold" }}>
               {isPlaying ? "⏸ Pause" : "▶ Play"}
             </button>
-            <button onClick={stopPlayback} disabled={!selectedOutput} style={{ padding: "10px 20px", backgroundColor: "#c0392b", color: "white", border: "none", borderRadius: "4px", cursor: selectedOutput ? "pointer" : "not-allowed", fontWeight: "bold" }}>
+            <button onClick={stopPlayback} disabled={!selectedOutput || !songDataRef.current} style={{ padding: "10px 20px", backgroundColor: "#c0392b", color: "white", border: "none", borderRadius: "4px", cursor: selectedOutput && songDataRef.current ? "pointer" : "not-allowed", fontWeight: "bold" }}>
               ⏹ Stop
             </button>
           </div>
+          {(!selectedOutput || !songDataRef.current || fileLoadStatus !== "loaded") && (
+            <p style={{ marginTop: "10px", color: "#f39c12", fontSize: "0.85em" }}>
+              {selectedOutput ? (
+                fileLoadStatus === "loading" ? "Loading MIDI file..." :
+                fileLoadStatus === "error" ? `Error: ${fileLoadError || "Unable to load file."}` :
+                "Waiting for MIDI file to finish loading..."
+              ) : "Select a MIDI output to enable playback."}
+            </p>
+          )}
         </>
       )}
     </div>
