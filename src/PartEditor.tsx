@@ -476,9 +476,15 @@ const PartEditor: React.FC = () => {
         </div>
 
         <div style={{ marginBottom: "15px" }}>
-          <label>Instrument (Quick Select): </label>
-          <select value={currentPart.instrumentIndex} onChange={handleInstrumentChange} style={{ width: "100%", padding: "4px" }}>
-            {SC88PRO_INSTRUMENTS.map((inst, i) => <option key={i} value={i}>{inst.name}</option>)}
+          <label>{partIndex === 9 ? "Drum Kit (Quick Select): " : "Instrument (Quick Select): "}</label>
+          <select
+            value={partIndex === 9 ? currentPart.drumKitIndex : currentPart.instrumentIndex}
+            onChange={partIndex === 9 ? handleDrumKitChange : handleInstrumentChange}
+            style={{ width: "100%", padding: "4px" }}
+          >
+            {(partIndex === 9 ? SC88PRO_DRUM_KITS : SC88PRO_INSTRUMENTS).map((inst, i) => (
+              <option key={i} value={i}>{inst.name}</option>
+            ))}
           </select>
         </div>
 
@@ -643,15 +649,6 @@ const PartEditor: React.FC = () => {
             <h4 style={{ margin: "0 0 10px 0", color: "#ecf0f1" }}>🥁 Drum Note Editor</h4>
             
             <div style={{ marginBottom: "10px" }}>
-              <label style={{ fontSize: "0.8em", color: "#bdc3c7" }}>Select Drum Kit</label>
-              <select 
-                value={currentPart.drumKitIndex} 
-                onChange={handleDrumKitChange}
-                style={{ width: "100%", padding: "4px", backgroundColor: "#34495e", color: "white", border: "none", marginBottom: "10px" }}
-              >
-                {SC88PRO_DRUM_KITS.map((kit, i) => <option key={i} value={i}>{kit.name}</option>)}
-              </select>
-
               <label style={{ fontSize: "0.8em", color: "#bdc3c7" }}>Select Drum Instrument</label>
               <div style={{ display: "flex", gap: "8px" }}>
                 <select 
